@@ -1,0 +1,8 @@
+# Dépendances principales
+google-cloud-vision==3.4.4
+google-cloud-aiplatform==1.38.0
+Pillow==10.3.0
+
+# Dépendances optionnelles (traitement des données)
+pandas>=2.0.3  # Pour l'export en CSV/Excel
+python-dotenv>=1.0.0  # Pour la gestion des variables d'environnement

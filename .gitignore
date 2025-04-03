@@ -1,0 +1,29 @@
+# Fichiers de l'IDE
+.idea/
+.vscode/
+
+# Environnement virtuel
+venv/
+.env
+.venv
+
+# Exports
+exports/
+
+# Pictures
+imgs/
+
+# Fichiers de compilation
+__pycache__/
+*.pyc
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+# Fichiers de logs
+*.log
+logs/
+
+# Fichiers d'exportation
+*.json
