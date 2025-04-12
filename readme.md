@@ -75,6 +75,8 @@ python vision_gemini_tagger.py ./images \
   --project VOTRE_PROJECT_ID \
   --output results.json
 
+python -m src.main imgs/ --credentials config/service-account.json --output resultatsfr.json
+
 Structure de sortie (JSON)
 
 {
