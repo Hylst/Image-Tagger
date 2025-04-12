@@ -15,9 +15,18 @@ def main():
     parser.add_argument("input_path", help="Image file or directory")
     parser.add_argument("--credentials", required=True, help="GCP service account JSON")
     parser.add_argument("--output", default="results.json", help="Output file")
-    parser.add_argument("--project", required=True, help="GCP project ID")
+    parser.add_argument("--project", help="GCP project ID (détecté automatiquement si non spécifié)")
     
     args = parser.parse_args()
+
+    # Récupération automatique du project_id
+    if not args.project:
+        with open(args.credentials) as f:
+            credentials_data = json.load(f)
+            args.project = credentials_data.get('project_id')
+    
+    if not args.project:
+        raise ValueError("Project ID non trouvé dans les credentials et non spécifié")
     
     # Initialisation des APIs
     vision_client, gemini_model = initialize_apis(args.credentials, args.project)
@@ -33,8 +42,8 @@ def main():
         results.append(processor.process_single_image(args.input_path))
     
     # Sauvegarde
-    with open(args.output, "w") as f:
-        json.dump(results, f, indent=2)
+    with open(args.output, "w", encoding='utf-8') as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
     
     logging.info(f"Processed {len(results)} images")
 
