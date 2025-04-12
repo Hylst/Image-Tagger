@@ -27,3 +27,6 @@ logs/
 
 # Fichiers d'exportation
 *.json
+
+# Anciens programmes et tests
+old/

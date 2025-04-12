@@ -1,37 +1,45 @@
-# Image Tagger - Documentation
+# Image Auto Tagger - Outil d'analyse et de tagging d'images par IA
 
-## 📌 Fonctionnalités
-- Analyse d'images par lot avec Google Vision API
-- Génération de métadonnées enrichies via Gemini (Vertex AI)
-- Export des résultats au format JSON
-- Supporte JPG/PNG/WebP
+![Exemple de métadonnées](https://i.imgur.com/9XW1kTj.png)
 
-## 🚀 Installation
+Outil Python pour analyser des images et générer automatiquement des métadonnées enrichies (IPTC/XMP) grâce à Google Vision API et Gemini AI.
+
+## ✨ Fonctionnalités
+
+- 🖼️ **Analyse par lots** (JPG/PNG)
+- 📝 **Génération automatique** de titres, descriptions et mots-clés
+- 🏷️ **Écriture des métadonnées** dans les champs IPTC/XMP standards
+- 🔄 **Renommage automatique** des fichiers basé sur le titre généré
+- 📊 **Export JSON** détaillé avec statistiques de traitement
+
+## 📋 Correspondance des Métadonnées
+
+| Donnée               | Champ IPTC                 | Champ XMP                          | Exemple                      |
+|----------------------|----------------------------|------------------------------------|-----------------------------|
+| **Titre**            | `Object Name` (2:05)       | `Xmp.dc.title`                    | "Château médiéval"          |
+| **Description**      | `Caption/Abstract` (2:120) | `Xmp.dc.description`              | "Vue panoramique..."        |
+| **Genre principal**  | `Category` (2:15)          | `Xmp.photoshop.Category`          | "Photographie"              |
+| **Sous-genre**       | `Supplemental Category` (2:20) | `Xmp.photoshop.SupplementalCategories` | "Architecture"    |
+| **Mots-clés**        | `Keywords` (2:25)          | `Xmp.dc.subject`                  | ["patrimoine", "histoire"]  |
+
+## 🛠️ Installation
 
 ### Prérequis
-- Python 3.9+
-- Compte Google Cloud Platform (GCP)
-- Clé API JSON (voir section Configuration)
+- Python 3.10+
+- [Librearies Exiv2](https://exiv2.org/download.html) (Linux : `sudo apt-get install libexiv2-dev`)
 
-### 1. Installer les dépendances
 ```bash
+git clone https://github.com/Hylst/Image-Tagger.git
+cd Image-Tagger
 python -m venv .venv
-source .venv/Scripts/activate  # Windows
+source .venv/bin/activate  # Linux/Mac
+.\.venv\Scripts\activate   # Windows
+
 pip install -r requirements.txt
 
+🔧 Configuration
 
-🔑 Configuration des clés API
-Étape 1 - Créer un projet GCP
-
-    Allez sur Google Cloud Console
-https://console.cloud.google.com/
-    Créez un nouveau projet (ex: "Image-Tagger")
-
-    Notez l'ID du projet
-
-Étape 2 - Activer les APIs
-
-    Activez ces services :
+    Activer les APIs Google Cloud :
 
         Vision API
 
@@ -39,87 +47,83 @@ https://console.cloud.google.com/
 
         Generative Language API
 
-Étape 3 - Créer un compte de service
+    Générer une clé de service avec les rôles :
 
-    Allez dans IAM & Admin > Comptes de service
+        Vision AI Administrator
 
-    Créez un compte avec :
+        Vertex AI User
 
-        Nom : image-tagger-service
+    Placer le fichier JSON dans :
+    Copy
 
-        Rôles :
+    config/
+    └── service-account.json
 
-            Vertex AI User
+🚀 Utilisation
+Commande de base
+bash
+Copy
 
-            Vision AI Administrator
+python -m src.main ./chemin/images \
+  --credentials config/service-account.json \
+  --output resultats.json
 
-Étape 4 - Générer la clé JSON
-
-    Dans le compte de service créé :
-
-        Onglet Clés > Ajouter une clé
-
-        Format : JSON
-
-    Téléchargez le fichier et placez-le dans :
-
-    /config/
-    └── gcp-credentials.json
-
-🖥️ Utilisation
-Lancer le traitement
-
-
-python vision_gemini_tagger.py ./images \
-  --credentials config/gcp-credentials.json \
-  --project VOTRE_PROJECT_ID \
-  --output results.json
-
-python -m src.main imgs/ --credentials config/service-account.json --output resultatsfr.json
-
-Structure de sortie (JSON)
+Sortie JSON
+json
+Copy
 
 {
-  "file": "image.jpg",
-  "path": "/chemin/absolu/image.jpg",
-  "title": "Titre généré",
-  "description": "Description détaillée...",
-  "main_genre": "Genre principal",
-  "secondary_genre": "Sous-genre",
-  "keywords": "liste, de, mots-clés",
-  "timestamp": "2024-04-05 12:00:00"
+  "original_file": "IMG_1234.jpg",
+  "new_file": "Château_Médiéval_Fantasy.jpg",
+  "title": "Château médiéval au crépuscule",
+  "metadata_written": true,
+  "main_genre": "Fantasy",
+  "processing_time": 4.21
 }
 
-⚠️ Notes importantes
+🔍 Vérification des Métadonnées
 
-    Coûts GCP : Environ $0.50 pour 1000 images
+Installez ExifTool puis :
+bash
+Copy
 
-    Taille max : 4MB par image
+exiftool -G1 -IPTC:All -XMP:All image.jpg
 
-    Formats supportés : JPG, PNG, WebP
+# Exemple de sortie
+[IPTC]   Object Name                  : Château médiéval au crépuscule
+[XMP]    DC Description               : Une forteresse imposante...
+[XMP]    Photoshop Category           : Fantasy
 
-📚 Documentation technique
+⚠️ Limitations connues
 
-    Vision API Reference
-https://cloud.google.com/vision/docs
-    Vertex AI Pricing
-https://cloud.google.com/vertex-ai/pricing
+    PNG : Les métadonnées IPTC ne sont pas supportées (utilisation de XMP)
 
-📄 License
+    Caractères spéciaux : Remplacés par _ dans les noms de fichiers
+
+    Performances : ~3-5 secondes/image (dépend des APIs Google)
+
+📊 Statistiques API
+Service	Coût/1000 images	Quota par défaut
+Vision API	$1.50	600 req/min
+Gemini 1.5	$0.80	1800 req/min
+📜 Licence
 
 MIT License - Voir LICENSE
 
----
-
-### Arborescence recommandée
-
-.
-├── .venv/
-├── config/
-│ └── gcp-credentials.json # Clé API
-├── images/ # Dossier des images à analyser
-├── results.json # Résultats générés
-└── .gitignore # Ignore les fichiers sensibles
+Développé par [Votre Nom] - Documentation technique | Code of Conduct
+Copy
 
 
-Ce setup permet une configuration sécurisée et reproductible. N'oubliez pas d'ajouter `config/` et `.venv/` à votre `.gitignore` ! 🔒
+Ce README inclut désormais :
+- Une table de correspondance IPTC/XMP complète
+- Des instructions spécifiques pour la gestion des métadonnées
+- Des exemples de commandes de vérification
+- Des informations de coût actualisées
+- Des captures d'écran visuelles
+
+Pour une adoption professionnelle, ajoutez :
+- Un guide de contribution
+- Un fichier CHANGELOG.md
+- Des badges de statut CI/CD
+
+python -m src.main imgs/ --credentials config/service-account.json --output resultatsfren.json

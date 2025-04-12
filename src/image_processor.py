@@ -8,6 +8,8 @@ from typing import Dict
 from PIL import Image
 from google.cloud import vision_v1
 from iptcinfo3 import IPTCInfo
+import pyexiv2
+import pathlib
 
 class ImageProcessor:
     def __init__(self, vision_client, gemini_model):
@@ -44,7 +46,16 @@ class ImageProcessor:
             
             # Renommage et métadonnées
             new_path = self._rename_file(original_path, gemini_data.get('title', ''))
-            metadata_status = self._write_iptc_metadata(new_path, gemini_data.get('title', ''))
+            metadata_status = self._write_metadata(
+                new_path,
+                {
+                    'title': gemini_data.get('title', ''),
+                    'description': gemini_data.get('description', ''),
+                    'main_genre': gemini_data.get('main_genre', ''),
+                    'secondary_genre': gemini_data.get('secondary_genre', ''),
+                    'keywords': gemini_data.get('keywords', [])
+                }
+            )
             
             return {
                 "original_file": os.path.basename(original_path),
@@ -132,26 +143,43 @@ class ImageProcessor:
             return original_path
 
     @staticmethod
-    def _write_iptc_metadata(self, image_path: str, title: str) -> bool:
-        """Écrit le titre dans les métadonnées IPTC"""
+    def _write_metadata(image_path: str, metadata: dict) -> bool:
+        """Écrit les métadonnées IPTC/XMP"""
         try:
+            image_path = str(image_path)  # Conversion pour pyexiv2 sous Windows
+            success = True
+
+            # Écriture IPTC (JPG seulement)
             if image_path.lower().endswith(('.jpg', '.jpeg')):
-                # Gestion JPG avec iptcinfo3
-                info = IPTCInfo(image_path, force=True)
-                info['object name'] = title
-                info['caption/abstract'] = title
-                info.save()
-                return True
-                
-            elif image_path.lower().endswith('.png'):
-                # Gestion PNG avec Pillow
-                with Image.open(image_path) as img:
-                    img.info['iptc_data'] = title.encode('utf-8')
-                    img.save(image_path)
-                return True
-                
-            return False
+                try:
+                    iptc_info = IPTCInfo(image_path, force=True)
+                    iptc_info['object name'] = metadata['title']
+                    iptc_info['caption/abstract'] = metadata['description']
+                    iptc_info['keywords'] = metadata['keywords']
+                    iptc_info['category'] = metadata['main_genre']
+                    iptc_info['supplemental category'] = [metadata['secondary_genre']]  # Liste
+                    iptc_info.save()
+                except Exception as iptc_error:
+                    logging.warning(f"Erreur IPTC : {str(iptc_error)}")
+                    success = False
+
+            # Écriture XMP (tous formats)
+            try:
+                with pyexiv2.Image(image_path) as img:
+                    xmp_data = {
+                        'Xmp.dc.title': [metadata['title']],  # Format tableau
+                        'Xmp.dc.description': [metadata['description']],
+                        'Xmp.dc.subject': metadata['keywords'],
+                        'Xmp.photoshop.Category': [metadata['main_genre']],
+                        'Xmp.photoshop.SupplementalCategories': [metadata['secondary_genre']]
+                    }
+                    img.modify_xmp(xmp_data)
+            except Exception as xmp_error:
+                logging.error(f"Erreur XMP : {str(xmp_error)}")
+                success = False
+            
+            return success
             
         except Exception as e:
-            logger.warning(f"Échec métadonnées IPTC ({os.path.basename(image_path)}): {str(e)}")
+            logging.error(f"Échec global métadonnées : {str(e)}")
             return False
