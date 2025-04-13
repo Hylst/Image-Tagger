@@ -4,17 +4,28 @@ import logging
 import re
 import time
 import os
+import pathlib
+import shutil
+import unicodedata
 from typing import Dict
+
 from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 from google.cloud import vision_v1
 from iptcinfo3 import IPTCInfo
 import pyexiv2
-import pathlib
 
 class ImageProcessor:
     def __init__(self, vision_client, gemini_model):
         self.vision_client = vision_client
         self.gemini_model = gemini_model
+
+    @staticmethod
+    def _sanitize_filename(title: str) -> str:
+        """Normalise les caractères et supprime les accents"""
+        normalized = unicodedata.normalize('NFKD', title)
+        cleaned = normalized.encode('ASCII', 'ignore').decode('ASCII')
+        return ''.join(c if c.isalnum() or c in ' -_' else '_' for c in cleaned.strip())[:50]
 
     @staticmethod
     def resize_image(image_path: str, max_size: int = 1024) -> bytes:
@@ -37,29 +48,20 @@ class ImageProcessor:
         """Traite une image complète"""
         try:
             start_time = time.time()
-            original_path = os.path.abspath(image_path)
-            image_bytes = self.resize_image(image_path)
+            original_path = pathlib.Path(image_path).resolve()
+            image_bytes = self.resize_image(str(original_path))
             
             # Analyse des API
             vision_data = self._analyze_with_vision(image_bytes)
             gemini_data = self._analyze_with_gemini(image_bytes, vision_data)
             
             # Renommage et métadonnées
-            new_path = self._rename_file(original_path, gemini_data.get('title', ''))
-            metadata_status = self._write_metadata(
-                new_path,
-                {
-                    'title': gemini_data.get('title', ''),
-                    'description': gemini_data.get('description', ''),
-                    'main_genre': gemini_data.get('main_genre', ''),
-                    'secondary_genre': gemini_data.get('secondary_genre', ''),
-                    'keywords': gemini_data.get('keywords', [])
-                }
-            )
+            new_path = self._rename_file(str(original_path), gemini_data.get('title', ''))
+            metadata_status = self._write_metadata(new_path, gemini_data)
             
             return {
-                "original_file": os.path.basename(original_path),
-                "new_file": os.path.basename(new_path),
+                "original_file": original_path.name,
+                "new_file": pathlib.Path(new_path).name,
                 "path": new_path,
                 **gemini_data,
                 "metadata_written": metadata_status,
@@ -80,7 +82,6 @@ class ImageProcessor:
                 {"type_": vision_v1.Feature.Type.WEB_DETECTION}
             ]
         })
-        
         return {
             "labels": [label.description for label in response.label_annotations],
             "web_entities": [entity.description for entity in response.web_detection.web_entities]
@@ -119,67 +120,94 @@ class ImageProcessor:
 
     @staticmethod
     def _rename_file(original_path: str, title: str) -> str:
-        """Renomme le fichier avec le titre généré"""
+        """Renommage sécurisé pour Windows avec gestion des accents"""
         try:
-            # Nettoyage du titre
-            sanitized = "".join(c if c.isalnum() or c in " -_." else "_" for c in title.strip())
-            sanitized = sanitized[:50].strip()  # Limite à 50 caractères
-            
-            ext = os.path.splitext(original_path)[1].lower()
-            new_name = f"{sanitized}{ext}"
-            new_path = os.path.join(os.path.dirname(original_path), new_name)
-            
+            src = pathlib.Path(original_path)
+            sanitized = ImageProcessor._sanitize_filename(title)
+            ext = src.suffix.lower()
+            dst = src.with_name(f"{sanitized}{ext}")
+
             # Gestion des doublons
             counter = 1
-            while os.path.exists(new_path):
-                new_name = f"{sanitized}_{counter}{ext}"
-                new_path = os.path.join(os.path.dirname(original_path), new_name)
+            while dst.exists():
+                dst = src.with_name(f"{sanitized}_{counter}{ext}")
                 counter += 1
-                
-            os.rename(original_path, new_path)
-            return new_path
+
+            shutil.move(str(src), str(dst))
+            return str(dst.resolve())
         except Exception as e:
-            logging.error(f"Échec du renommage : {str(e)}")
+            logging.error(f"Échec renommage : {str(e)}")
             return original_path
 
-    @staticmethod
-    def _write_metadata(image_path: str, metadata: dict) -> bool:
-        """Écrit les métadonnées IPTC/XMP"""
+@staticmethod
+def _write_metadata(image_path: str, metadata: dict) -> bool:
+    """Écriture robuste des métadonnées pour tous formats"""
+    try:
+        path = pathlib.Path(image_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Fichier introuvable : {path}")
+
+        # Conversion spéciale pour pyexiv2 sous Windows
+        win_path = bytes(path).decode('utf-8', 'surrogateescape')
+        success = True
+
         try:
-            image_path = str(image_path)  # Conversion pour pyexiv2 sous Windows
-            success = True
+            # Écriture XMP/ITPC avec pyexiv2 (principal)
+            with pyexiv2.Image(win_path) as img:
+                # XMP Standard
+                img.modify_xmp({
+                    'Xmp.dc.title': metadata.get('title', ''),
+                    'Xmp.photoshop.Headline': metadata.get('title', ''),
+                    'Xmp.dc.description': metadata.get('description', ''),
+                    'Xmp.dc.subject': metadata.get('keywords', []),
+                    'Xmp.photoshop.Category': metadata.get('main_genre', ''),
+                    'Xmp.photoshop.SupplementalCategories': [metadata.get('secondary_genre', '')]
+                })
 
-            # Écriture IPTC (JPG seulement)
-            if image_path.lower().endswith(('.jpg', '.jpeg')):
-                try:
-                    iptc_info = IPTCInfo(image_path, force=True)
-                    iptc_info['object name'] = metadata['title']
-                    iptc_info['caption/abstract'] = metadata['description']
-                    iptc_info['keywords'] = metadata['keywords']
-                    iptc_info['category'] = metadata['main_genre']
-                    iptc_info['supplemental category'] = [metadata['secondary_genre']]  # Liste
-                    iptc_info.save()
-                except Exception as iptc_error:
-                    logging.warning(f"Erreur IPTC : {str(iptc_error)}")
-                    success = False
+                # IPTC pour JPG
+                if path.suffix.lower() in ['.jpg', '.jpeg']:
+                    img.modify_iptc({
+                        'Iptc.Application2.ObjectName': metadata.get('title', ''),
+                        'Iptc.Application2.Headline': metadata.get('title', ''),
+                        'Iptc.Application2.Caption': metadata.get('description', ''),
+                        'Iptc.Application2.Keywords': metadata.get('keywords', [])
+                    })
 
-            # Écriture XMP (tous formats)
+        except Exception as pyexiv_error:
+            logging.warning(f"Erreur pyexiv2 : {str(pyexiv_error)}")
+            success = False
+
+        # Double écriture pour PNG avec Pillow (fallback)
+        if path.suffix.lower() == '.png':
             try:
-                with pyexiv2.Image(image_path) as img:
-                    xmp_data = {
-                        'Xmp.dc.title': [metadata['title']],  # Format tableau
-                        'Xmp.dc.description': [metadata['description']],
-                        'Xmp.dc.subject': metadata['keywords'],
-                        'Xmp.photoshop.Category': [metadata['main_genre']],
-                        'Xmp.photoshop.SupplementalCategories': [metadata['secondary_genre']]
-                    }
-                    img.modify_xmp(xmp_data)
-            except Exception as xmp_error:
-                logging.error(f"Erreur XMP : {str(xmp_error)}")
+                with Image.open(path) as img:
+                    # Conversion en RGB si nécessaire
+                    if img.mode != 'RGB':
+                        img = img.convert('RGB')
+                    
+                    # Écriture XMP dans PNG via PngInfo
+                    png_info = PngInfo()
+                    xmp_packet = f"""
+                    <x:xmpmeta xmlns:x="adobe:ns:meta/">
+                        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                            <rdf:Description rdf:about=""
+                                xmlns:dc="http://purl.org/dc/elements/1.1/"
+                                dc:title="{metadata.get('title', '')}"
+                                dc:description="{metadata.get('description', '')}"
+                                dc:subject="{','.join(metadata.get('keywords', []))}"/>
+                        </rdf:RDF>
+                    </x:xmpmeta>
+                    """
+                    png_info.add_text('XML:com.adobe.xmp', xmp_packet)
+                    img.save(path, pnginfo=png_info, optimize=True)
+                    success = True
+
+            except Exception as pillow_error:
+                logging.error(f"Erreur Pillow PNG : {str(pillow_error)}")
                 success = False
-            
-            return success
-            
-        except Exception as e:
-            logging.error(f"Échec global métadonnées : {str(e)}")
-            return False
+
+        return success
+
+    except Exception as e:
+        logging.error(f"Échec global métadonnées [{path.name}] : {str(e)}")
+        return False
